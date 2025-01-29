@@ -1,0 +1,6 @@
+requests
+typing
+langchain
+bs4
+langchain_community
+flask
