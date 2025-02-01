@@ -7,10 +7,14 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.llms import HuggingFaceHub
+from langchain_community.llms import HuggingFaceEndpoint
 from langchain.chains import RetrievalQA
-from flask import Flask, request, jsonify
+from langchain.prompts import PromptTemplate
+from flask import Flask, request, jsonify, render_template  # Add render_template
+from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app)
 
 class BrainloxCourseLoader(BaseLoader):
     def __init__(self, url: str):
@@ -101,24 +105,45 @@ def setup_rag_pipeline():
     if not huggingface_token:
         raise ValueError("Please set HUGGINGFACE_API_TOKEN environment variable")
 
-    # Initialize HuggingFace LLM
-    llm = HuggingFaceHub(
-        repo_id="google/flan-t5-base",  # or any other model you prefer
-        huggingfacehub_api_token=huggingface_token
+  # Setup TinyLlama through HuggingFace
+    llm = HuggingFaceEndpoint(
+        endpoint_url="https://api-inference.huggingface.co/models/TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+        huggingfacehub_api_token=huggingface_token,
+        task="text-generation",
     )
 
-    # Create QA chain
+    # Create prompt template
+    prompt = PromptTemplate(
+        template="""Use the following context to answer the question.
+
+        Context: {context}
+
+        Question: {question}
+
+        Answer in complete sentences.""",
+        input_variables=["context", "question"]
+    )
+
+    # Create and return the RAG chain
     qa_chain = RetrievalQA.from_chain_type(
         llm=llm,
         chain_type="stuff",
-        retriever=vectorstore.as_retriever()
+        retriever=vectorstore.as_retriever(search_kwargs={"k": 5}),
+        chain_type_kwargs={"prompt": prompt}
     )
 
     return qa_chain
 
 def query_courses(qa_chain, query: str) -> str:
-    return qa_chain.run(query)
+    try:
+        # Simply use the chain's invoke method
+        response = qa_chain.invoke({"query": query})
+        return response["result"]
+    except Exception as e:
+        print(f"Error in query_courses: {e}")
+        return str(e)
 
+# Chat endpoint
 @app.route('/api/chat', methods=['POST'])
 def chat():
     try:
@@ -136,5 +161,10 @@ def chat():
         print(f"Error in chat endpoint: {e}")
         return jsonify({"error": "An error occurred"}), 500
 
+# Webpage endpoint
+@app.route('/')
+def home():
+    return render_template('index.html')  # Serve the HTML page
+
 if __name__ == '__main__':
-    app.run(debug=True)  # debug=False for production
+    app.run(debug=True)

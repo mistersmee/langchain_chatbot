@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat with Courses Assistant</title>
+    <script>
+        async function sendMessage(event) {
+            event.preventDefault(); // Prevent the form from reloading the page
+            const userMessage = document.getElementById("userMessage").value;
+            const responseDiv = document.getElementById("response");
+
+            // Clear the response area
+            responseDiv.innerHTML = "Processing...";
+
+            try {
+                const response = await fetch("/api/chat", {  // Use relative URL
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ message: userMessage })
+                });
+
+                if (!response.ok) {
+                    throw new Error("Failed to fetch response. Please try again.");
+                }
+
+                const data = await response.json();
+                responseDiv.innerHTML = data.response || "No response received.";
+            } catch (error) {
+                responseDiv.innerHTML = `Error: ${error.message}`;
+            }
+        }
+    </script>
+</head>
+<body style="font-family: Arial, sans-serif; margin: 20px;">
+
+    <h1>Courses Assistant Chat</h1>
+    <form onsubmit="sendMessage(event)">
+        <label for="userMessage">Ask your question:</label><br>
+        <input type="text" id="userMessage" name="userMessage" style="width: 80%; padding: 10px; margin-top: 10px;"><br><br>
+        <button type="submit" style="padding: 10px 20px; font-size: 16px;">Send</button>
+    </form>
+
+    <h3>Response:</h3>
+    <div id="response" style="margin-top: 10px; padding: 10px; border: 1px solid #ccc; background-color: #f9f9f9;"></div>
+
+</body>
+</html>
