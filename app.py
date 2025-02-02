@@ -12,6 +12,8 @@ from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from flask import Flask, request, jsonify, render_template  # Add render_template
 from flask_cors import CORS
+import hashlib
+import os
 
 app = Flask(__name__)
 CORS(app)
@@ -73,6 +75,13 @@ class BrainloxCourseLoader(BaseLoader):
 
         return documents
 
+def document_hash(doc: Document) -> str:
+    """
+    Compute a hash of the document content to identify duplicates.
+    """
+    return hashlib.md5(doc.page_content.encode('utf-8')).hexdigest()
+
+
 def setup_rag_pipeline():
     # Initialize the loader
     loader = BrainloxCourseLoader("https://brainlox.com/courses/category/technical")
@@ -91,14 +100,43 @@ def setup_rag_pipeline():
     # Initialize embeddings
     embeddings = HuggingFaceEmbeddings()
 
-    # Create vector store
-    vectorstore = Chroma.from_documents(
-        documents=splits,
-        embedding=embeddings,
-        persist_directory="./data/chroma_db"
-    )
+    # Load or create the vector store
+    persist_dir = "./data/chroma_db"
+    try:
+        vectorstore = Chroma(
+            persist_directory=persist_dir,
+            embedding_function=embeddings,  # Explicitly pass the embedding function
+        )
+    except Exception:
+        # If the vector store doesn't exist, initialize it with an empty collection
+        vectorstore = Chroma.from_documents([], embedding=embeddings, persist_directory=persist_dir)
 
-    import os
+ # Retrieve existing hashes from metadata
+    existing_hashes = set()
+    try:
+        existing_docs = vectorstore.similarity_search("", k=1000)  # Retrieve all docs
+        for doc in existing_docs:
+            hash_value = doc.metadata.get("hash", None)
+            if hash_value:
+                existing_hashes.add(hash_value)
+    except Exception as e:
+        print(f"Error retrieving existing documents: {e}")
+
+    # Filter out duplicates
+    new_documents = []
+    for doc in splits:
+        doc_hash = document_hash(doc)
+        if doc_hash not in existing_hashes:
+            doc.metadata["hash"] = doc_hash  # Add hash to metadata
+            new_documents.append(doc)
+
+    if new_documents:
+        # Add new documents to the vector store
+        vectorstore.add_documents(new_documents)
+        vectorstore.persist()
+        print(f"Added {len(new_documents)} new documents to the vector store.")
+    else:
+        print("No new documents to add to the vector store.")
 
     # Get HuggingFace API token from environment variable
     huggingface_token = os.environ.get("HUGGINGFACE_API_TOKEN")
@@ -106,8 +144,8 @@ def setup_rag_pipeline():
         raise ValueError("Please set HUGGINGFACE_API_TOKEN environment variable")
 
   # Setup TinyLlama through HuggingFace
-    llm = HuggingFaceEndpoint(
-        endpoint_url="https://api-inference.huggingface.co/models/TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    llm = HuggingFaceHub(
+        repo_id="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
         huggingfacehub_api_token=huggingface_token,
         task="text-generation",
     )
@@ -135,13 +173,22 @@ def setup_rag_pipeline():
     return qa_chain
 
 def query_courses(qa_chain, query: str) -> str:
-    try:
-        # Simply use the chain's invoke method
-        response = qa_chain.invoke({"query": query})
-        return response["result"]
-    except Exception as e:
-        print(f"Error in query_courses: {e}")
-        return str(e)
+    """
+    Query the RAG pipeline and extract the actual answer from the response.
+    """
+    # Get the raw response from the chain
+    raw_response = qa_chain.run(query)
+
+    # Define the marker used in the prompt
+    answer_marker = "Answer in complete sentences."
+
+    # Extract the answer after the marker
+    if answer_marker in raw_response:
+        actual_answer = raw_response.split(answer_marker, 1)[1].strip()  # Take everything after the marker
+    else:
+        actual_answer = raw_response  # Fallback in case the marker is not found
+
+    return actual_answer
 
 # Chat endpoint
 @app.route('/api/chat', methods=['POST'])
